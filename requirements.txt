@@ -1,0 +1,12 @@
+kagglehub
+deep-translator
+pandas
+openpyxl
+kagglehub
+deep-translator
+pandas
+openpyxl
+torch
+scikit-learn
+numpy
+streamlit
