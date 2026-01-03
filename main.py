@@ -1,107 +1,114 @@
-
-
+# main.py
+import time
 import streamlit as st
-import pandas as pd
-from datetime import datetime
+from st_keyup import st_keyup
+
+# Modüller
+from core.config import DEFAULT_MOOD
 from core.predictor import MoodPredictor
+from core.director import director_engine
+from ui.styles import apply_custom_css
 
-# Sayfa Ayarları
-st.set_page_config (
-    page_title = "Berserk Journaling" ,
-    page_icon = "🧠" ,
-    layout = "wide" ,
-    initial_sidebar_state = "expanded"
-)
+# Sayfa Ayarı
+st.set_page_config ( page_title = "Berserk Journaling" , page_icon = "🗡️" , layout = "wide" )
+apply_custom_css ()
 
-# --- CSS İLE ÖZELLEŞTİRME (OPSİYONEL) ---
-st.markdown ( """
-<style>
-    .stTextArea textarea {font-size: 16px !important;}
-    .mood-card {padding: 15px; border-radius: 10px; background-color: #f0f2f6; margin-bottom: 10px;}
-</style>
-""" , unsafe_allow_html = True )
+# --- HAFIZA (SESSION STATE) ---
+# Uygulama hafızasını başlatıyoruz
+defaults = {
+    "last_switch": 0 ,
+    "current_path": None ,
+    "next_type": "gif" ,
+    "used_files": {} ,
+    "last_mood": None ,
+    "active_music_mood": None ,
+    "pending_mood": None ,
+    # Chooser için gerekli hafıza alanı
+    "visual_history": {
+        'current_mood': None ,
+        'used_gifs': [] ,
+        'used_imgs': []
+    }
+}
 
-# --- OTURUM (SESSION) YÖNETİMİ ---
-# Geçmiş kayıtları hafızada tutmak için
-if 'history' not in st.session_state:
-    st.session_state['history'] = []
+for k , v in defaults.items ():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
-# Modeli bir kez yükle (Cache mekanizması)
+# --- MODEL YÜKLEME ---
 @st.cache_resource
-def load_predictor():
-    return MoodPredictor ()
+def get_predictor():
+    return MoodPredictor ()  # Argüman göndermiyoruz, predictor.py kendi yolunu biliyor
 
 
-predictor = load_predictor ()
+try:
+    predictor = get_predictor ()
+except Exception as e:
+    st.error ( f"Model Yüklenemedi: {e}" )
+    st.stop ()
 
-# ==========================================
-# SOL MENÜ (SIDEBAR) - AYARLAR VE GEÇMİŞ
-# ==========================================
-with st.sidebar:
-    st.header ( "⚙️ Ayarlar" )
-
-    # Toggle Butonlar
-    show_details = st.toggle ( "Detaylı Analizi Göster" , value = True )
-    dark_mode_analysis = st.toggle ( "Karanlık Mod Analizi" , value = False )
-
-    st.divider ()  # Çizgi çek
-
-    st.header ( "📚 Geçmiş Günlükler" )
-
-    # Geçmiş listesini göster
-    if len ( st.session_state['history'] ) > 0:
-        for i , entry in enumerate ( reversed ( st.session_state['history'] ) ):
-            # Her bir geçmiş kaydı için bir buton/expander
-            with st.expander ( f"{entry['date']} - {entry['mood'].upper ()}" ):
-                st.write ( entry['text'][:50] + "..." )  # Metnin başını göster
-                st.caption ( f"Skor: %{entry['score'] * 100:.1f}" )
-    else:
-        st.info ( "Henüz bir giriş yapılmadı." )
-
-# ==========================================
-# ANA SAYFA (MAIN AREA)
-# ==========================================
+# --- ARAYÜZ (LAYOUT) ---
 st.title ( "Berserk Journaling 🗡️" )
-st.subheader ( "Bugün nasıl hissediyorsun?" )
 
-# Kullanıcıdan Metin Alma
-user_text = st.text_area ( "İçini dök..." , height = 150 , placeholder = "Bugün proje yüzünden biraz gergindim ama..." )
+# Ekranı ikiye bölüyoruz: Sol taraf (Yazı + Stats), Sağ taraf (Boşluk/Görsel alanı)
+col_input , col_space = st.columns ( [1 , 2] )
 
-col1 , col2 = st.columns ( [1 , 5] )
-with col1:
-    analyze_btn = st.button ( "Analiz Et" , use_container_width = True , type = "primary" )
+with col_input:
+    # 1. YAZI ALANI
+    # debounce=300: Yazmayı bıraktıktan 300ms sonra çalışır
+    user_text = st_keyup ( " " , key = "active_journal" , debounce = 300 ,
+                           placeholder = "Guts gibi anlat..." )
 
-if analyze_btn and user_text:
-    with st.spinner ( 'Duygular analiz ediliyor...' ):
-        # Modelden tahmin al
-        dominant_mood , probabilities = predictor.predict ( user_text )
+    detected_mood = None
+    probs = None
 
-        if dominant_mood:
-            # Sonucu Geçmişe Ekle
-            score = probabilities[dominant_mood]
-            new_entry = {
-                'date': datetime.now ().strftime ( "%H:%M" ) ,
-                'text': user_text ,
-                'mood': dominant_mood ,
-                'score': score
-            }
-            st.session_state['history'].append ( new_entry )
+    # Yazı varsa analiz yap
+    if user_text and user_text.strip ():
+        try:
+            detected_mood , probs = predictor.predict ( user_text )
 
-            # --- SONUÇ EKRANI ---
-            st.success ( f"Baskın Duygu: **{dominant_mood.upper ()}**" )
+            # Başlık
+            st.markdown ( f"### 🔥 Vibe: {detected_mood.upper ()}" )
 
-            # Eğer ayarlardan 'Detaylı Analizi Göster' açıksa
-            if show_details:
-                st.write ( "---" )
-                st.write ( "#### Duygu Dağılımı" )
+            # 2. İSTATİSTİKLER (TEXTBOX ALTINA EKLENDİ)
+            if probs:
+                st.markdown ( "---" )
+                st.caption ( "Duygu Analizi:" )
 
-                # Grafikleri 2 kolon halinde gösterelim
-                cols = st.columns ( len ( probabilities ) )
-                for idx , (mood , prob) in enumerate ( probabilities.items () ):
-                    with cols[idx]:
-                        st.metric ( label = mood.capitalize () , value = f"%{prob * 100:.1f}" )
-                        # İlerleme çubuğu
-                        st.progress ( prob )
-        else:
-            st.error ( "Bir hata oluştu. Lütfen tekrar deneyin." )
+                c1 , c2 = st.columns ( 2 )
+
+                # Puanına göre sırala
+                items = sorted ( list ( probs.items () ) , key = lambda x: x[1] , reverse = True )
+                mid = (len ( items ) + 1) // 2
+
+                with c1:
+                    for m , p in items[:mid]:
+                        if p > 0.01:  # %1 altındakileri gösterme
+                            st.write ( f"**{m.capitalize ()}**: %{int ( p * 100 )}" )
+                            st.progress ( p )
+                with c2:
+                    for m , p in items[mid:]:
+                        if p > 0.01:
+                            st.write ( f"**{m.capitalize ()}**: %{int ( p * 100 )}" )
+                            st.progress ( p )
+
+        except Exception as e:
+            st.warning ( f"Analiz hatası: {e}" )
+
+# --- ATMOSFER MOTORU ---
+# Yazı yoksa son bilinen mood veya varsayılan mood
+final_mood = detected_mood if detected_mood else (st.session_state.last_mood or DEFAULT_MOOD)
+
+# Director'ı çağır (Arka planı ve müziği yönetir)
+director_engine ( final_mood )
+
+# Son mood'u kaydet
+if detected_mood:
+    st.session_state.last_mood = detected_mood
+
+# --- CANLI DÖNGÜ (Heartbeat) ---
+# Burası çok önemli. Sayfanın sürekli yenilenmesini sağlar.
+# Süreyi 1 saniyeye düşürdüm ki sistem daha sık kontrol etsin, takılma olmasın.
+time.sleep ( 1.0 )
+st.rerun ()

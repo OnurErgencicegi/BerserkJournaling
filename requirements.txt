@@ -1,5 +1,7 @@
 kagglehub
 deep-translator
+transformers
+sentencepiece
 pandas
 openpyxl
 kagglehub
@@ -10,3 +12,5 @@ torch
 scikit-learn
 numpy
 streamlit
+streamlit-keyup
+streamlit-authenticator

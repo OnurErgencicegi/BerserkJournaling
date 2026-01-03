@@ -1,10 +1,58 @@
 # core/utils.py
 import re
 import os
-import pandas as pd
-import kagglehub
-from core.config import Config
+import base64
+import pickle
+import streamlit as st
 
+# Yeni modüler yapıdan importlar
+from ui.styles import inject_background_css
+
+# --- YOL AYARLARI ---
+# Projenin ana dizinini buluyoruz (core klasörünün bir üstü)
+BASE_DIR = os.path.dirname ( os.path.dirname ( os.path.abspath ( __file__ ) ) )
+VOCAB_PATH = os.path.join ( BASE_DIR , "models" , "vocab.pkl" )
+
+
+# ==========================================
+# 1. DOSYA VE ARAYÜZ İŞLEMLERİ
+# ==========================================
+
+def get_base64(path):
+    """
+    Verilen dosya yolundaki resmi okur ve Base64 formatına çevirir.
+    """
+    try:
+        with open ( path , "rb" ) as f:
+            return base64.b64encode ( f.read () ).decode ()
+    except Exception:
+        return ""
+
+
+def set_background(image_path):
+    """
+    Görsel yolunu alır, okur, mime tipini belirler ve
+    UI katmanına (styles.py) CSS olarak gönderir.
+    """
+    if not image_path or not os.path.exists ( image_path ):
+        return
+
+    # 1. Base64 verisini al
+    b64_image = get_base64 ( image_path )
+    if not b64_image:
+        return
+
+    # 2. Uzantıya göre Mime Type belirle
+    ext = os.path.splitext ( image_path )[1].lower ()
+    mime_type = "image/gif" if ext == ".gif" else "image/jpeg"
+
+    # 3. UI katmanındaki fonksiyonu çağırarak CSS'i bas
+    inject_background_css ( b64_image , mime_type )
+
+
+# ==========================================
+# 2. YAPAY ZEKA VE METİN İŞLEMLERİ
+# ==========================================
 
 def clean_text(text):
     text = str ( text ).lower ()
@@ -14,58 +62,38 @@ def clean_text(text):
 
 def get_word2idx():
     """
-    Kaggle'dan veriyi indirir ve kelime sözlüğünü (vocabulary) oluşturur.
-    Predictor ve Model bu sözlüğe ihtiyaç duyar.
+    Eğitim sırasında (train.py) oluşturulan 'vocab.pkl' dosyasını yükler.
+    Artık internetten indirme yapmaz.
     """
-    print ( "--- Veri Seti ve Sözlük Hazırlanıyor ---" )
-    try:
-        path = kagglehub.dataset_download ( Config.DATASET_URL )
-    except Exception as e:
-        print ( f"Veri indirme hatası: {e}" )
-        return {"<PAD>": 0 , "<UNK>": 1}  # Hata olursa boş dönmesin
-
-    # CSV dosyasını bul
-    csv_files = [f for f in os.listdir ( path ) if f.endswith ( '.csv' )]
-    if not csv_files:
-        raise FileNotFoundError ( "İndirilen klasörde CSV dosyası bulunamadı." )
-
-    df = pd.read_csv ( os.path.join ( path , csv_files[0] ) )
-
-    # Sütun isimlerini düzelt (text, content, tweet vb.)
-    df.columns = [c.lower () for c in df.columns]
-    if 'text' not in df.columns:
-        if 'content' in df.columns:
-            df.rename ( columns = {'content': 'text'} , inplace = True )
-        elif 'tweet' in df.columns:
-            df.rename ( columns = {'tweet': 'text'} , inplace = True )
-
-    # Kelime sözlüğü oluştur
-    word2idx = {"<PAD>": 0 , "<UNK>": 1}
-    idx = 2
-
-    # Eğer 'text' sütunu bulunduysa işle, yoksa boş geç
-    if 'text' in df.columns:
-        for text in df['text']:
-            cleaned = clean_text ( str ( text ) )
-            for word in cleaned.split ():
-                if word not in word2idx:
-                    word2idx[word] = idx
-                    idx += 1
+    if os.path.exists ( VOCAB_PATH ):
+        try:
+            with open ( VOCAB_PATH , 'rb' ) as f:
+                return pickle.load ( f )
+        except Exception as e:
+            print ( f"Sözlük yükleme hatası: {e}" )
+            return {"<PAD>": 0 , "<UNK>": 1}
     else:
-        print ( "Uyarı: 'text' sütunu bulunamadı, sözlük sadece temel etiketlerle oluşturuldu." )
-
-    return word2idx
+        # Eğer dosya yoksa (henüz train.py çalıştırılmadıysa) hata vermesin diye:
+        print ( f"UYARI: {VOCAB_PATH} bulunamadı! Lütfen önce train.py dosyasını çalıştırın." )
+        return {"<PAD>": 0 , "<UNK>": 1}
 
 
 def text_to_indices(text , word2idx , max_len):
+    """
+    Metni temizler ve sözlükteki karşılıklarına (sayılara) çevirir.
+    """
     cleaned = clean_text ( text )
     tokens = cleaned.split ()
     indices = []
-    for word in tokens:
-        indices.append ( word2idx.get ( word , word2idx["<UNK>"] ) )
 
+    for word in tokens:
+        # Kelime sözlükte yoksa <UNK> (1) kullan
+        indices.append ( word2idx.get ( word , word2idx.get ( "<UNK>" , 1 ) ) )
+
+    # Uzunluk sabitleme (Padding / Truncating)
     if len ( indices ) > max_len:
         indices = indices[:max_len]
     else:
-        indices += [word2idx["<PAD>"]] * (max_len - len ( indices ))
+        indices += [word2idx.get ( "<PAD>" , 0 )] * (max_len - len ( indices ))
+
     return indices
